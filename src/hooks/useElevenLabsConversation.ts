@@ -14,6 +14,11 @@ interface TranscriptEntry {
   timestamp: number;
 }
 
+interface UseElevenLabsConversationOptions {
+  /** Dynamic system prompt injected via overrides at session start. */
+  systemPrompt?: string;
+}
+
 interface UseElevenLabsConversationReturn {
   status: ConversationStatus;
   isSpeaking: boolean;
@@ -26,14 +31,14 @@ interface UseElevenLabsConversationReturn {
  * Hook that wraps the official @elevenlabs/react useConversation hook
  * with app-specific transcript tracking and status management.
  *
- * Uses the signed URL approach so the API key never leaves the server.
- * The @elevenlabs/react SDK handles:
- *  - WebSocket/WebRTC connection for bidirectional audio streaming
- *  - Microphone capture and voice activity detection
- *  - Audio playback with chunked streaming (minimizes inter-sentence gaps)
- *  - Turn-taking (interrupt support for natural conversation)
+ * Accepts an optional systemPrompt that is injected into the agent
+ * session via the `overrides` API — this is how the recipe context
+ * reaches the voice agent at runtime without hardcoding it in the
+ * ElevenLabs dashboard.
  */
-export function useElevenLabsConversation(): UseElevenLabsConversationReturn {
+export function useElevenLabsConversation(
+  options?: UseElevenLabsConversationOptions
+): UseElevenLabsConversationReturn {
   const [status, setStatus] = useState<ConversationStatus>("idle");
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
 
@@ -61,6 +66,8 @@ export function useElevenLabsConversation(): UseElevenLabsConversationReturn {
 
   /**
    * Fetch a signed URL from our API route, then start the conversation.
+   * If a systemPrompt was provided, inject it as an agent prompt override
+   * so the voice agent has full recipe context for the session.
    */
   const connect = useCallback(async () => {
     setStatus("connecting");
@@ -75,15 +82,26 @@ export function useElevenLabsConversation(): UseElevenLabsConversationReturn {
       if (!res.ok) throw new Error("Failed to get signed URL");
       const { signedUrl } = await res.json();
 
-      // 3. Start the ElevenLabs conversation session via the SDK
-      await conversation.startSession({
-        signedUrl,
-      });
+      // 3. Build session config, injecting recipe context via overrides
+      const sessionConfig: Record<string, unknown> = { signedUrl };
+
+      if (options?.systemPrompt) {
+        sessionConfig.overrides = {
+          agent: {
+            prompt: {
+              prompt: options.systemPrompt,
+            },
+          },
+        };
+      }
+
+      // 4. Start the ElevenLabs conversation session via the SDK
+      await conversation.startSession(sessionConfig);
     } catch (error) {
       console.error("Connection failed:", error);
       setStatus("error");
     }
-  }, [conversation]);
+  }, [conversation, options?.systemPrompt]);
 
   /**
    * Cleanly end the conversation session.
