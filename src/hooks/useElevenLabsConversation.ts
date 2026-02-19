@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useConversation } from "@elevenlabs/react";
 
 export type ConversationStatus =
@@ -15,8 +15,10 @@ interface TranscriptEntry {
 }
 
 interface UseElevenLabsConversationOptions {
-  /** Dynamic system prompt injected via overrides at session start. */
+  /** System prompt injected via overrides.agent.prompt.prompt */
   systemPrompt?: string;
+  /** First message the agent speaks on connect, via overrides.agent.firstMessage */
+  firstMessage?: string;
 }
 
 interface UseElevenLabsConversationReturn {
@@ -28,13 +30,13 @@ interface UseElevenLabsConversationReturn {
 }
 
 /**
- * Hook that wraps the official @elevenlabs/react useConversation hook
- * with app-specific transcript tracking and status management.
+ * Hook that wraps the official @elevenlabs/react useConversation hook.
  *
- * Accepts an optional systemPrompt that is injected into the agent
- * session via the `overrides` API — this is how the recipe context
- * reaches the voice agent at runtime without hardcoding it in the
- * ElevenLabs dashboard.
+ * KEY FIX: Overrides (prompt, firstMessage, language) MUST be passed to
+ * useConversation(), not startSession(). The startSession() call only
+ * accepts connection params (signedUrl, agentId, connectionType, etc.).
+ * Putting overrides in startSession silently drops them, causing the
+ * agent to have no greeting and no recipe context.
  */
 export function useElevenLabsConversation(
   options?: UseElevenLabsConversationOptions
@@ -42,7 +44,17 @@ export function useElevenLabsConversation(
   const [status, setStatus] = useState<ConversationStatus>("idle");
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
 
+  // Pass overrides to useConversation — this is where the SDK reads them.
   const conversation = useConversation({
+    overrides: {
+      agent: {
+        prompt: {
+          prompt: options?.systemPrompt ?? "",
+        },
+        firstMessage: options?.firstMessage,
+        language: "en",
+      },
+    },
     onConnect: () => {
       setStatus("connected");
     },
@@ -62,55 +74,68 @@ export function useElevenLabsConversation(
     },
   });
 
+  // Stable ref to avoid connect callback changing on every render
+  const conversationRef = useRef(conversation);
+  conversationRef.current = conversation;
+
   const isSpeaking = conversation.isSpeaking;
 
   /**
-   * Fetch a signed URL from our API route, then start the conversation.
-   * If a systemPrompt was provided, inject it as an agent prompt override
-   * so the voice agent has full recipe context for the session.
+   * Fetch a signed URL, then start the session.
+   * startSession only receives connection params — overrides are
+   * already configured in useConversation above.
    */
   const connect = useCallback(async () => {
     setStatus("connecting");
     setTranscript([]);
 
     try {
-      // 1. Request microphone permission early for smoother UX
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      // 1. Request microphone access — must happen from a user-gesture
+      //    context or on page load before we open the WebSocket.
+      //    Getting the stream also "warms up" the AudioContext so
+      //    the browser doesn't suspend it on first play.
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      // 2. Fetch signed URL from server
+      // 2. Warm up AudioContext to prevent browser auto-suspend.
+      //    Some browsers (Chrome, Safari) create the AudioContext in a
+      //    "suspended" state and only resume it after user interaction.
+      //    By creating and resuming one here, we ensure audio playback
+      //    starts immediately when the agent's first message arrives.
+      try {
+        const ctx = new AudioContext();
+        if (ctx.state === "suspended") {
+          await ctx.resume();
+        }
+        // We don't need to keep this context — the SDK creates its own.
+        // This just ensures the browser's audio policy is unlocked.
+        ctx.close();
+      } catch {
+        // AudioContext warm-up is best-effort; don't block on failure.
+      }
+
+      // 3. Release the mic stream — the SDK will request its own.
+      stream.getTracks().forEach((t) => t.stop());
+
+      // 4. Fetch signed URL from our server-side API route.
       const res = await fetch("/api/signed-url");
       if (!res.ok) throw new Error("Failed to get signed URL");
       const { signedUrl } = await res.json();
 
-      // 3. Start the ElevenLabs conversation session, injecting recipe
-      //    context via the overrides API so the agent knows the recipe.
-      await conversation.startSession({
-        signedUrl,
-        ...(options?.systemPrompt
-          ? {
-              overrides: {
-                agent: {
-                  prompt: {
-                    prompt: options.systemPrompt,
-                  },
-                },
-              },
-            }
-          : {}),
-      });
+      // 5. Start the session — only connection params here.
+      //    The overrides (prompt, firstMessage) were already set in
+      //    useConversation above. The agent will immediately speak
+      //    the firstMessage once the WebSocket connects.
+      await conversationRef.current.startSession({ signedUrl });
     } catch (error) {
       console.error("Connection failed:", error);
       setStatus("error");
     }
-  }, [conversation, options?.systemPrompt]);
+  }, []); // Stable: no deps that change per render
 
-  /**
-   * Cleanly end the conversation session.
-   */
   const disconnect = useCallback(async () => {
-    await conversation.endSession();
+    await conversationRef.current.endSession();
     setStatus("disconnected");
-  }, [conversation]);
+  }, []);
 
   return {
     status,
