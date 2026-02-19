@@ -6,54 +6,95 @@ import {
   useElevenLabsConversation,
   ConversationStatus,
 } from "@/hooks/useElevenLabsConversation";
-import { recipe, agentSystemPrompt } from "@/lib/recipe";
+import { recipe, agentSystemPrompt, agentFirstMessage } from "@/lib/recipe";
 
 /**
  * Full-screen voice cooking interface.
- * Displays the recipe steps, animated chef hat, and live transcript.
- * Injects the full recipe into the ElevenLabs agent prompt via overrides
- * so the voice agent can respond to commands like "read step 2".
+ *
+ * KEY CHANGES for session persistence:
+ * 1. Shows a "Start Cooking" button instead of auto-connecting. This
+ *    guarantees the first startSession() call happens inside a user
+ *    gesture, which unlocks the browser AudioContext. Without this,
+ *    Chrome/Safari suspend the AudioContext and the greeting cuts out.
+ * 2. Passes firstMessage override so the agent speaks a greeting
+ *    immediately on connect without relying on dashboard config.
+ * 3. Overrides are now on useConversation (not startSession), so the
+ *    SDK actually applies them.
  */
 export default function VoiceCooking() {
   const { status, isSpeaking, transcript, connect, disconnect } =
-    useElevenLabsConversation({ systemPrompt: agentSystemPrompt });
+    useElevenLabsConversation({
+      systemPrompt: agentSystemPrompt,
+      firstMessage: agentFirstMessage,
+    });
   const transcriptEndRef = useRef<HTMLDivElement>(null);
-  const hasConnected = useRef(false);
   const [showRecipe, setShowRecipe] = useState(true);
-
-  // Auto-connect when component mounts
-  useEffect(() => {
-    if (!hasConnected.current) {
-      hasConnected.current = true;
-      connect();
-    }
-  }, [connect]);
+  const [hasStarted, setHasStarted] = useState(false);
 
   // Auto-scroll transcript
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [transcript]);
 
+  /**
+   * Start the voice session on user click. This is intentionally NOT
+   * auto-connected on mount because browsers require a user gesture
+   * to unlock audio playback. Auto-connecting in useEffect causes
+   * the AudioContext to be created in "suspended" state, which makes
+   * the agent's greeting audio get buffered and then flushed (appears
+   * to "end immediately").
+   */
+  const handleStart = async () => {
+    setHasStarted(true);
+    await connect();
+  };
+
   const statusLabel = getStatusLabel(status);
 
   return (
     <div className="w-full max-w-lg mx-auto px-6 py-8 flex flex-col items-center min-h-screen">
-      {/* Status indicator */}
-      <div className="mb-2">
-        <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 backdrop-blur-sm">
-          <div
-            className={`w-1.5 h-1.5 rounded-full ${getStatusDotColor(status)}`}
-          />
-          <span className="font-body text-xs text-white/40 tracking-wider uppercase">
-            {statusLabel}
-          </span>
+      {/* Status indicator — only shown after session starts */}
+      {hasStarted && (
+        <div className="mb-2">
+          <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-white/5 backdrop-blur-sm">
+            <div
+              className={`w-1.5 h-1.5 rounded-full ${getStatusDotColor(status)}`}
+            />
+            <span className="font-body text-xs text-white/40 tracking-wider uppercase">
+              {statusLabel}
+            </span>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Chef Hat — central focus */}
       <div className="flex-shrink-0 my-6">
         <ChefHat isSpeaking={isSpeaking} size={120} />
       </div>
+
+      {/* Pre-connect state: show a start button */}
+      {!hasStarted && (
+        <div className="flex flex-col items-center gap-4 my-4">
+          <p className="font-body text-sm text-white/40 text-center max-w-xs leading-relaxed">
+            Your voice cooking assistant is ready. Tap below to begin — the chef
+            will greet you and walk through each step.
+          </p>
+          <button
+            onClick={handleStart}
+            className="group relative overflow-hidden rounded-xl py-3.5 px-8 transition-all duration-300 hover:scale-[1.02] active:scale-[0.98]"
+            style={{
+              background:
+                "linear-gradient(135deg, #6B2FA0 0%, #8348BC 50%, #6B2FA0 100%)",
+              boxShadow:
+                "0 4px 16px rgba(107,47,160,0.35), 0 1px 3px rgba(107,47,160,0.2)",
+            }}
+          >
+            <span className="font-body font-medium text-white tracking-wide">
+              Start Cooking
+            </span>
+          </button>
+        </div>
+      )}
 
       {/* Listening indicator */}
       {status === "connected" && !isSpeaking && (
@@ -150,35 +191,43 @@ export default function VoiceCooking() {
       </div>
 
       {/* Transcript */}
-      <div className="w-full flex-1 overflow-y-auto max-h-[35vh] px-2 scrollbar-hide">
-        {transcript.length === 0 && status === "connected" && (
-          <p className="text-center font-body text-sm text-white/20 italic mt-4">
-            The chef will greet you momentarily…
-          </p>
-        )}
+      {hasStarted && (
+        <div className="w-full flex-1 overflow-y-auto max-h-[35vh] px-2 scrollbar-hide">
+          {transcript.length === 0 && status === "connected" && (
+            <p className="text-center font-body text-sm text-white/20 italic mt-4">
+              The chef will greet you momentarily…
+            </p>
+          )}
 
-        <div className="space-y-3">
-          {transcript.map((entry, i) => (
-            <div
-              key={`${entry.timestamp}-${i}`}
-              className={`transcript-line flex ${
-                entry.role === "agent" ? "justify-start" : "justify-end"
-              }`}
-            >
+          {transcript.length === 0 && status === "connecting" && (
+            <p className="text-center font-body text-sm text-white/20 italic mt-4">
+              Connecting to your cooking assistant…
+            </p>
+          )}
+
+          <div className="space-y-3">
+            {transcript.map((entry, i) => (
               <div
-                className={`max-w-[85%] px-4 py-2.5 rounded-2xl font-body text-sm leading-relaxed ${
-                  entry.role === "agent"
-                    ? "bg-white/8 text-white/80 rounded-bl-md"
-                    : "bg-plum/30 text-white/65 rounded-br-md"
+                key={`${entry.timestamp}-${i}`}
+                className={`transcript-line flex ${
+                  entry.role === "agent" ? "justify-start" : "justify-end"
                 }`}
               >
-                {entry.text}
+                <div
+                  className={`max-w-[85%] px-4 py-2.5 rounded-2xl font-body text-sm leading-relaxed ${
+                    entry.role === "agent"
+                      ? "bg-white/8 text-white/80 rounded-bl-md"
+                      : "bg-plum/30 text-white/65 rounded-br-md"
+                  }`}
+                >
+                  {entry.text}
+                </div>
               </div>
-            </div>
-          ))}
-          <div ref={transcriptEndRef} />
+            ))}
+            <div ref={transcriptEndRef} />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Error / disconnect state */}
       {status === "error" && (
@@ -188,7 +237,7 @@ export default function VoiceCooking() {
             configuration.
           </p>
           <button
-            onClick={connect}
+            onClick={handleStart}
             className="font-body text-sm text-plum-light/80 underline underline-offset-2 hover:text-plum-light transition-colors"
           >
             Try again
@@ -202,7 +251,7 @@ export default function VoiceCooking() {
             Session ended. Enjoy your meal!
           </p>
           <button
-            onClick={connect}
+            onClick={handleStart}
             className="font-body text-sm text-plum-light/60 underline underline-offset-2 hover:text-plum-light transition-colors"
           >
             Start over
