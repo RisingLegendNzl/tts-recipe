@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Conversation } from "@11labs/client";
+import { useCallback, useState } from "react";
+import { useConversation } from "@elevenlabs/react";
 
 export type ConversationStatus =
   | "idle"
@@ -7,8 +7,6 @@ export type ConversationStatus =
   | "connected"
   | "disconnected"
   | "error";
-
-export type AgentMode = "listening" | "speaking";
 
 interface TranscriptEntry {
   role: "agent" | "user";
@@ -18,7 +16,6 @@ interface TranscriptEntry {
 
 interface UseElevenLabsConversationReturn {
   status: ConversationStatus;
-  agentMode: AgentMode;
   isSpeaking: boolean;
   transcript: TranscriptEntry[];
   connect: () => Promise<void>;
@@ -26,29 +23,46 @@ interface UseElevenLabsConversationReturn {
 }
 
 /**
- * Hook that wraps the ElevenLabs Conversational AI client.
+ * Hook that wraps the official @elevenlabs/react useConversation hook
+ * with app-specific transcript tracking and status management.
  *
  * Uses the signed URL approach so the API key never leaves the server.
- * The ElevenLabs client handles:
- *  - WebSocket connection for bidirectional audio streaming
+ * The @elevenlabs/react SDK handles:
+ *  - WebSocket/WebRTC connection for bidirectional audio streaming
  *  - Microphone capture and voice activity detection
  *  - Audio playback with chunked streaming (minimizes inter-sentence gaps)
  *  - Turn-taking (interrupt support for natural conversation)
  */
 export function useElevenLabsConversation(): UseElevenLabsConversationReturn {
   const [status, setStatus] = useState<ConversationStatus>("idle");
-  const [agentMode, setAgentMode] = useState<AgentMode>("listening");
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
-  const conversationRef = useRef<Conversation | null>(null);
 
-  const isSpeaking = agentMode === "speaking";
+  const conversation = useConversation({
+    onConnect: () => {
+      setStatus("connected");
+    },
+    onDisconnect: () => {
+      setStatus("disconnected");
+    },
+    onError: (error: string) => {
+      console.error("ElevenLabs conversation error:", error);
+      setStatus("error");
+    },
+    onMessage: (message: { source: string; message: string }) => {
+      const role = message.source === "ai" ? "agent" : "user";
+      setTranscript((prev) => [
+        ...prev,
+        { role, text: message.message, timestamp: Date.now() },
+      ]);
+    },
+  });
+
+  const isSpeaking = conversation.isSpeaking;
 
   /**
    * Fetch a signed URL from our API route, then start the conversation.
    */
   const connect = useCallback(async () => {
-    if (conversationRef.current) return;
-
     setStatus("connecting");
     setTranscript([]);
 
@@ -61,65 +75,26 @@ export function useElevenLabsConversation(): UseElevenLabsConversationReturn {
       if (!res.ok) throw new Error("Failed to get signed URL");
       const { signedUrl } = await res.json();
 
-      // 3. Start the ElevenLabs conversation session
-      const conversation = await Conversation.startSession({
+      // 3. Start the ElevenLabs conversation session via the SDK
+      await conversation.startSession({
         signedUrl,
-        onConnect: () => {
-          setStatus("connected");
-        },
-        onDisconnect: () => {
-          setStatus("disconnected");
-          conversationRef.current = null;
-        },
-        onError: (error: unknown) => {
-          console.error("ElevenLabs conversation error:", error);
-          setStatus("error");
-        },
-        onModeChange: (mode: { mode: "listening" | "speaking" }) => {
-          setAgentMode(mode.mode);
-        },
-        onMessage: (message: { source: string; message: string }) => {
-          // Capture transcript entries from both agent and user
-          const role = message.source === "ai" ? "agent" : "user";
-          setTranscript((prev) => [
-            ...prev,
-            { role, text: message.message, timestamp: Date.now() },
-          ]);
-        },
       });
-
-      conversationRef.current = conversation;
     } catch (error) {
       console.error("Connection failed:", error);
       setStatus("error");
     }
-  }, []);
+  }, [conversation]);
 
   /**
    * Cleanly end the conversation session.
    */
   const disconnect = useCallback(async () => {
-    if (conversationRef.current) {
-      await conversationRef.current.endSession();
-      conversationRef.current = null;
-    }
+    await conversation.endSession();
     setStatus("disconnected");
-    setAgentMode("listening");
-  }, []);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (conversationRef.current) {
-        conversationRef.current.endSession();
-        conversationRef.current = null;
-      }
-    };
-  }, []);
+  }, [conversation]);
 
   return {
     status,
-    agentMode,
     isSpeaking,
     transcript,
     connect,
