@@ -1,0 +1,126 @@
+@import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=Outfit:wght@300;400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --cream: #FDF6EC;
+  --warmblack: #1A1611;
+  --terracotta: #C75B3A;
+  --sage: #7A8B6F;
+  --plum: #6B2FA0;
+  --plum-light: #9B5FD0;
+  --plum-dark: #4A1F70;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Outfit', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Noise texture overlay for depth */
+.noise-bg::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  opacity: 0.03;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 256 256' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+  z-index: 9999;
+}
+
+/* Chef hat speaking animation */
+@keyframes chef-speak {
+  0%, 100% {
+    transform: scale(1) rotate(0deg);
+    filter: drop-shadow(0 0 12px rgba(107, 47, 160, 0.4));
+  }
+  12% {
+    transform: scale(1.1) rotate(-7deg);
+    filter: drop-shadow(0 0 20px rgba(107, 47, 160, 0.6));
+  }
+  24% {
+    transform: scale(1.04) rotate(5deg);
+    filter: drop-shadow(0 0 16px rgba(107, 47, 160, 0.5));
+  }
+  36% {
+    transform: scale(1.08) rotate(-4deg);
+    filter: drop-shadow(0 0 22px rgba(107, 47, 160, 0.65));
+  }
+  50% {
+    transform: scale(1.02) rotate(3deg);
+    filter: drop-shadow(0 0 14px rgba(107, 47, 160, 0.45));
+  }
+  65% {
+    transform: scale(1.09) rotate(-5deg);
+    filter: drop-shadow(0 0 18px rgba(107, 47, 160, 0.55));
+  }
+  80% {
+    transform: scale(1.03) rotate(2deg);
+    filter: drop-shadow(0 0 12px rgba(107, 47, 160, 0.4));
+  }
+}
+
+.chef-speaking {
+  animation: chef-speak 1.4s ease-in-out infinite;
+}
+
+/* Glow ring behind chef hat while speaking */
+@keyframes glow-expand {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+  50% {
+    transform: scale(1.2);
+    opacity: 0.15;
+  }
+  100% {
+    transform: scale(0.8);
+    opacity: 0.5;
+  }
+}
+
+.glow-ring {
+  animation: glow-expand 2.2s ease-in-out infinite;
+}
+
+/* Smooth transcript appearance */
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.transcript-line {
+  animation: slide-up 0.35s ease-out forwards;
+}
+
+/* Voice cooking page gradient */
+.voice-gradient {
+  background: linear-gradient(
+    160deg,
+    #0F0A14 0%,
+    #1A1128 35%,
+    #150D1F 65%,
+    #0D0912 100%
+  );
+}
