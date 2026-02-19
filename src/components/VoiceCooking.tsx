@@ -11,15 +11,15 @@ import { recipe, agentSystemPrompt, agentFirstMessage } from "@/lib/recipe";
 /**
  * Full-screen voice cooking interface.
  *
- * KEY CHANGES for session persistence:
- * 1. Shows a "Start Cooking" button instead of auto-connecting. This
- *    guarantees the first startSession() call happens inside a user
- *    gesture, which unlocks the browser AudioContext. Without this,
- *    Chrome/Safari suspend the AudioContext and the greeting cuts out.
- * 2. Passes firstMessage override so the agent speaks a greeting
- *    immediately on connect without relying on dashboard config.
- * 3. Overrides are now on useConversation (not startSession), so the
- *    SDK actually applies them.
+ * Session persistence strategy:
+ * 1. "Start Cooking" button ensures connect() runs in a user-gesture
+ *    context (required for AudioContext + mic access).
+ * 2. The hook's session guard prevents Strict Mode double-mount from
+ *    killing the WebSocket.
+ * 3. visibilitychange handler prevents the browser from garbage-collecting
+ *    the WebSocket when the tab is backgrounded.
+ * 4. Session stays alive until the user clicks "End session" or closes
+ *    the tab — no automatic teardown.
  */
 export default function VoiceCooking() {
   const { status, isSpeaking, transcript, connect, disconnect } =
@@ -30,6 +30,7 @@ export default function VoiceCooking() {
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const [showRecipe, setShowRecipe] = useState(true);
   const [hasStarted, setHasStarted] = useState(false);
+  const isStartingRef = useRef(false);
 
   // Auto-scroll transcript
   useEffect(() => {
@@ -37,16 +38,73 @@ export default function VoiceCooking() {
   }, [transcript]);
 
   /**
-   * Start the voice session on user click. This is intentionally NOT
-   * auto-connected on mount because browsers require a user gesture
-   * to unlock audio playback. Auto-connecting in useEffect causes
-   * the AudioContext to be created in "suspended" state, which makes
-   * the agent's greeting audio get buffered and then flushed (appears
-   * to "end immediately").
+   * Prevent the browser from throttling or suspending our WebSocket
+   * when the tab is hidden. Some browsers aggressively throttle
+   * background tabs, which can cause the WebSocket to close.
+   *
+   * Web Audio API workaround: create a silent oscillator that keeps
+   * the audio thread alive. This is a well-known technique used by
+   * real-time audio apps.
+   */
+  useEffect(() => {
+    if (status !== "connected") return;
+
+    let audioCtx: AudioContext | null = null;
+    let oscillator: OscillatorNode | null = null;
+
+    const handleVisibilityChange = () => {
+      if (document.hidden && !audioCtx) {
+        // Tab was hidden — start a silent oscillator to keep audio alive
+        try {
+          audioCtx = new AudioContext();
+          oscillator = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          gain.gain.value = 0; // Silent
+          oscillator.connect(gain);
+          gain.connect(audioCtx.destination);
+          oscillator.start();
+        } catch {
+          // Best-effort
+        }
+      } else if (!document.hidden && audioCtx) {
+        // Tab is visible again — clean up the keep-alive
+        try {
+          oscillator?.stop();
+          audioCtx.close();
+        } catch {
+          // Ignore
+        }
+        audioCtx = null;
+        oscillator = null;
+      }
+    };
+
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      try {
+        oscillator?.stop();
+        audioCtx?.close();
+      } catch {
+        // Ignore
+      }
+    };
+  }, [status]);
+
+  /**
+   * Start the voice session on user click. Guarded against double-tap
+   * with isStartingRef to prevent overlapping connect() calls.
    */
   const handleStart = async () => {
+    if (isStartingRef.current) return;
+    isStartingRef.current = true;
     setHasStarted(true);
-    await connect();
+
+    try {
+      await connect();
+    } finally {
+      isStartingRef.current = false;
+    }
   };
 
   const statusLabel = getStatusLabel(status);
