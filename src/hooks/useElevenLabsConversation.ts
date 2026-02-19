@@ -82,21 +82,22 @@ export function useElevenLabsConversation(
       if (!res.ok) throw new Error("Failed to get signed URL");
       const { signedUrl } = await res.json();
 
-      // 3. Build session config, injecting recipe context via overrides
-      const sessionConfig: Record<string, unknown> = { signedUrl };
-
-      if (options?.systemPrompt) {
-        sessionConfig.overrides = {
-          agent: {
-            prompt: {
-              prompt: options.systemPrompt,
-            },
-          },
-        };
-      }
-
-      // 4. Start the ElevenLabs conversation session via the SDK
-      await conversation.startSession(sessionConfig);
+      // 3. Start the ElevenLabs conversation session, injecting recipe
+      //    context via the overrides API so the agent knows the recipe.
+      await conversation.startSession({
+        signedUrl,
+        ...(options?.systemPrompt
+          ? {
+              overrides: {
+                agent: {
+                  prompt: {
+                    prompt: options.systemPrompt,
+                  },
+                },
+              },
+            }
+          : {}),
+      });
     } catch (error) {
       console.error("Connection failed:", error);
       setStatus("error");
